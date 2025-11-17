@@ -112,22 +112,17 @@ async def send_agent_message(author: str, message: str, ctx: Context) -> str:
     Returns:
         Confirmation that your message was posted successfully
     """
-    if not author or not author.strip():
-        raise ToolError("Author name is required and cannot be empty")
-
-    if not message or not message.strip():
-        raise ToolError("Message content is required and cannot be empty")
-
     await ctx.info(f"Posting message from '{author}' to development channel...")
 
     try:
         ensure_dirs()
-        send_message(author.strip(), message.strip())
-        await ctx.info(f"✓ Message posted successfully")
-        return f"Message posted to development channel from {author}"
+        msg = send_message(author, message)
+        return f"Message posted to development channel from {msg['author']} at {msg['timestamp']}"
 
+    except ValueError as e:
+        raise ToolError(f"Validation error: {str(e)}")
     except Exception as e:
-        raise ToolError(f"Failed to send message: {str(e)}")
+        raise ToolError(f"Failed to send message ({type(e).__name__}): {str(e)}")
 
 
 @mcp.tool
@@ -177,16 +172,15 @@ async def get_agent_messages(for_agent: str, ctx: Context) -> list:
         unread = get_unread_for(agent_name)
 
         if unread:
-            await ctx.info(f"✓ Found {len(unread)} unread message(s)")
+            await ctx.info(f"Found {len(unread)} unread message(s)")
             update_last_seen(agent_name, unread)
-            await ctx.info(f"✓ Marked as read")
         else:
-            await ctx.info("✓ No new messages - you're all caught up!")
+            await ctx.info("No new messages - you're all caught up!")
 
         return unread
 
     except Exception as e:
-        raise ToolError(f"Failed to retrieve messages: {str(e)}")
+        raise ToolError(f"Failed to retrieve messages ({type(e).__name__}): {str(e)}")
 
 
 @mcp.tool
@@ -224,11 +218,11 @@ async def get_all_agent_messages(ctx: Context) -> list:
     try:
         ensure_dirs()
         messages = get_all_messages()
-        await ctx.info(f"✓ Retrieved {len(messages)} total message(s)")
+        await ctx.info(f"Retrieved {len(messages)} total message(s)")
         return messages
 
     except Exception as e:
-        raise ToolError(f"Failed to retrieve messages: {str(e)}")
+        raise ToolError(f"Failed to retrieve messages ({type(e).__name__}): {str(e)}")
 
 
 @mcp.tool
@@ -273,12 +267,12 @@ async def list_known_agents(ctx: Context) -> dict:
         if agent_count == 0:
             await ctx.info("No agents have read messages yet")
         else:
-            await ctx.info(f"✓ Found {agent_count} active agent(s)")
+            await ctx.info(f"Found {agent_count} active agent(s)")
 
         return last_seen
 
     except Exception as e:
-        raise ToolError(f"Failed to list agents: {str(e)}")
+        raise ToolError(f"Failed to list agents ({type(e).__name__}): {str(e)}")
 
 
 # Entry point for running the server

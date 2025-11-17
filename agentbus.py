@@ -26,7 +26,8 @@ import tempfile
 import shutil
 from typing import List, Dict
 
-BASE_DIR = os.path.join(os.getcwd(), ".agentbus")
+# Allow override via environment variable
+BASE_DIR = os.getenv("AGENTBUS_DIR", os.path.join(os.getcwd(), ".agentbus"))
 MESSAGES_DIR = os.path.join(BASE_DIR, "messages")
 LAST_SEEN_FILE = os.path.join(BASE_DIR, "last_seen.json")
 
@@ -69,17 +70,55 @@ def read_message_file(path: str) -> Dict:
         return json.load(f)
 
 
-def send_message(author: str, content: str):
-    ts = iso_now().replace(":", "-")  # safe for filenames
-    filename = f"{ts}_{author}.json"
+def validate_author(author: str):
+    """Validate author name for safety and usability."""
+    if not author or not author.strip():
+        raise ValueError("Author name cannot be empty")
+
+    author = author.strip()
+
+    if len(author) > 100:
+        raise ValueError("Author name too long (max 100 characters)")
+
+    # Check for path-unsafe characters
+    unsafe_chars = ['/', '\\', '\x00', '\n', '\r']
+    if any(c in author for c in unsafe_chars):
+        raise ValueError("Author name contains invalid characters")
+
+    return author
+
+
+def validate_message(content: str):
+    """Validate message content."""
+    if not content or not content.strip():
+        raise ValueError("Message content cannot be empty")
+
+    content = content.strip()
+
+    if len(content) > 100000:  # 100KB limit
+        raise ValueError("Message content too long (max 100,000 characters)")
+
+    return content
+
+
+def send_message(author: str, content: str) -> Dict:
+    """Send a message and return the message object with timestamp."""
+    author = validate_author(author)
+    content = validate_message(content)
+
+    # Use single timestamp for both filename and message content
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    ts_filename = timestamp.replace(":", "-")  # safe for filenames
+    filename = f"{ts_filename}_{author}.json"
     fullpath = os.path.join(MESSAGES_DIR, filename)
+
     message = {
         "author": author,
-        "timestamp": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+        "timestamp": timestamp,
         "content": content,
     }
     atomic_write(fullpath, json.dumps(message, ensure_ascii=False, indent=2))
-    # print(f"Message saved: {filename}")
+    return message
 
 
 def load_last_seen() -> Dict[str, str]:
@@ -173,14 +212,21 @@ def cmd_init(args):
 
 def cmd_send(args):
     ensure_dirs()
-    send_message(args.author, args.message)
+    try:
+        message = send_message(args.author, args.message)
 
-    all_msgs = get_all_messages()
-    if all_msgs:
-        last_msg = all_msgs[-1]
+        # Update sender's last_seen to the message they just sent (no race condition)
         last_seen = load_last_seen()
-        last_seen[args.author] = last_msg["timestamp"]
+        last_seen[message["author"]] = message["timestamp"]
         save_last_seen(last_seen)
+
+        if args.json:
+            print(json.dumps(message, ensure_ascii=False))
+        else:
+            print(f"Message sent by {message['author']} at {message['timestamp']}")
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_get_messages(args):
@@ -188,15 +234,22 @@ def cmd_get_messages(args):
     if args.for_agent:
         name = args.for_agent
         unread = get_unread_for(name)
-        if unread:
+        if args.json:
+            print(json.dumps(unread, ensure_ascii=False, indent=2))
+        elif unread:
             pretty_print_messages(unread)
-            update_last_seen(name, unread)
         else:
             print("(no unread messages)")
+
+        if unread:
+            update_last_seen(name, unread)
     else:
         # show all
         all_msgs = get_all_messages()
-        pretty_print_messages(all_msgs)
+        if args.json:
+            print(json.dumps(all_msgs, ensure_ascii=False, indent=2))
+        else:
+            pretty_print_messages(all_msgs)
 
 
 def cmd_list_agents(args):
@@ -214,10 +267,12 @@ def main():
     p_send = sub.add_parser("send", help='Send a message: agentbus send --author "Name" "message"')
     p_send.add_argument("--author", required=True, help="Author name")
     p_send.add_argument("message", help="Message content")
+    p_send.add_argument("--json", action="store_true", help="Output in JSON format")
     p_send.set_defaults(func=cmd_send)
 
     p_get = sub.add_parser("get-messages", help="Get messages. Use --for to get unread for an agent")
     p_get.add_argument("--for", dest="for_agent", help="Agent name to get unread messages for")
+    p_get.add_argument("--json", action="store_true", help="Output in JSON format")
     p_get.set_defaults(func=cmd_get_messages)
 
     p_list = sub.add_parser("list-agents", help="Show known agents and their last seen timestamp")
